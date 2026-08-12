@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/vasankidambi/soc-triage-agent/main/governance/schema/agent-manifest.schema.json",
+  "title": "Agent Security Manifest",
+  "type": "object",
+  "required": ["manifest_version", "metadata", "control_principle", "model", "scope", "data_domains", "tools", "approvals", "network", "logging", "limits", "mcp_integrity", "evaluation"],
+  "additionalProperties": false,
+  "properties": {
+    "manifest_version": { "const": "1.0" },
+    "metadata": {
+      "type": "object",
+      "required": ["name", "version", "owner", "risk_tier", "description", "implementation"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "owner": { "type": "string", "minLength": 1 },
+        "risk_tier": { "type": "integer", "enum": [1, 2, 3] },
+        "description": { "type": "string", "minLength": 1 },
+        "implementation": { "type": "string", "minLength": 1 }
+      }
+    },
+    "control_principle": { "type": "string", "minLength": 1 },
+    "model": {
+      "type": "object",
+      "required": ["phase1_adapter", "authority", "key_source"],
+      "additionalProperties": true,
+      "properties": {
+        "phase1_adapter": { "type": "string" },
+        "optional_adapters": { "type": "array", "items": { "type": "string" } },
+        "authority": { "const": "none" },
+        "key_source": { "const": "environment_only" }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "required": ["tenant", "queue", "alert_type", "data_classification", "enforced_by"],
+      "additionalProperties": true,
+      "properties": {
+        "data_classification": { "const": "synthetic" },
+        "enforced_by": { "type": "string", "minLength": 1 }
+      }
+    },
+    "data_domains": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "classification", "access", "enforced_by"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "classification": { "const": "synthetic" },
+          "access": { "enum": ["read", "read_write", "deny"] },
+          "enforced_by": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "side_effects", "scope"],
+        "additionalProperties": true,
+        "properties": {
+          "name": { "type": "string" },
+          "side_effects": { "type": "boolean" },
+          "request_only": { "type": "boolean" },
+          "approval_required": { "type": "boolean" },
+          "scope": { "type": "string" },
+          "allowed_only_when_verdict": { "type": "string" },
+          "enforced_by": { "type": "string" }
+        }
+      }
+    },
+    "approvals": {
+      "type": "object",
+      "required": ["approver_role", "on_timeout", "fail_closed", "enforced_by"],
+      "additionalProperties": false,
+      "properties": {
+        "approver_role": { "type": "string" },
+        "on_timeout": { "const": "deny" },
+        "fail_closed": { "const": true },
+        "enforced_by": { "type": "string", "minLength": 1 }
+      }
+    },
+    "network": {
+      "type": "object",
+      "required": ["runtime", "install_time"],
+      "additionalProperties": false,
+      "properties": {
+        "runtime": { "const": "none" },
+        "install_time": { "type": "string" }
+      }
+    },
+    "logging": {
+      "type": "object",
+      "required": ["audit", "events", "emitted_by"],
+      "additionalProperties": false,
+      "properties": {
+        "audit": { "const": true },
+        "events": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "emitted_by": { "type": "string", "minLength": 1 }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "required": ["max_containment_recommendations_per_run", "containment_execution"],
+      "additionalProperties": false,
+      "properties": {
+        "max_containment_recommendations_per_run": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "containment_execution": { "const": "none" }
+      }
+    },
+    "mcp_integrity": {
+      "type": "object",
+      "required": ["tool_allowlist", "schema_pinning", "drift_detection", "enforced_by"],
+      "additionalProperties": false,
+      "properties": {
+        "tool_allowlist": { "const": true },
+        "schema_pinning": { "const": true },
+        "drift_detection": { "const": true },
+        "enforced_by": { "type": "string", "minLength": 1 }
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "required": ["location", "required_suites"],
+      "additionalProperties": false,
+      "properties": {
+        "location": { "type": "string" },
+        "required_suites": { "type": "array", "minItems": 3, "items": { "type": "string" } }
+      }
+    }
+  }
+}

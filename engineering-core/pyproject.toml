@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "soc-triage-agent"
+version = "0.1.0"
+description = "Local defensive SOC alert-triage workflow with deterministic controls"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+authors = [{ name = "Vasan Kidambi" }]
+classifiers = [
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+  "anthropic==0.121.0",
+  "httpx==0.28.1",
+  "langgraph==1.2.10",
+  "langgraph-checkpoint-sqlite==3.1.1",
+  "mcp==2.0.0",
+  "pydantic==2.13.4",
+  "cryptography>=50.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "detect-secrets==1.5.0",
+  "langgraph-cli[inmem]==0.4.31",
+  "langgraph-sdk==0.4.2",
+  "pytest==9.1.1",
+]
+
+[project.scripts]
+soc-triage = "soc_triage_agent.run_cli:main"
+soc-triage-sdk = "soc_triage_agent.run_sdk:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]

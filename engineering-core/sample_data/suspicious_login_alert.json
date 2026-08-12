@@ -1,0 +1,14 @@
+{
+  "alert_id": "SYN-ALT-2026-0042",
+  "tenant_id": "tenant-soc-lab",
+  "queue": "identity-security",
+  "alert_type": "suspicious-login",
+  "data_classification": "synthetic",
+  "source": "synthetic-siem",
+  "user_id": "usr-syn-1042",
+  "source_ip": "198.51.100.42",
+  "device_id": "dev-syn-new-77",
+  "observed_at": "2026-08-08T18:42:00Z",
+  "summary": "Successful synthetic sign-in from a new device after repeated failures.",
+  "failed_attempts": 8
+}

@@ -1,0 +1,99 @@
+# Agent security manifest — declared, enforceable security contract for the SOC triage agent.
+# Each control names the exact implementation site in ../engineering-core so this manifest
+# can be validated against the code, not just read. See validate.py.
+manifest_version: "1.0"
+
+metadata:
+  name: soc-triage-agent
+  version: "0.1.0"
+  owner: security-architecture
+  risk_tier: 1   # produces containment recommendations touching a sensitive workflow; approval-gated
+  description: >
+    Defensive SOC alert-triage agent for synthetic suspicious-login alerts. It validates scope,
+    gathers synthetic evidence over MCP, correlates signals, emits a structured verdict, and pauses
+    for human approval before a containment recommendation can be recorded as actioned. It never
+    changes a real account or connects to a real security system.
+  implementation: ../engineering-core
+
+control_principle: >
+  The model proposes; LangGraph controls state and routing; deterministic policy authorizes;
+  MCP executes; a human approves anything consequential. The model has no authority to act.
+
+model:
+  phase1_adapter: stub          # deterministic, key-free
+  optional_adapters: [anthropic, ollama]
+  authority: none               # proposes analysis only; cannot authorize or execute
+  key_source: environment_only  # keys never hardcoded (model_adapter.py)
+
+scope:
+  tenant: tenant-soc-lab
+  queue: identity-security
+  alert_type: suspicious-login
+  data_classification: synthetic
+  enforced_by: guardrails.authorize_triage
+
+data_domains:
+  - name: alert
+    classification: synthetic
+    access: read
+    enforced_by: guardrails.validate_alert   # RFC 5737 documentation IPs only
+  - name: enrichment
+    classification: synthetic
+    access: read
+    enforced_by: guardrails.sanitize_untrusted_payload
+
+tools:
+  - name: identity_lookup
+    side_effects: false
+    scope: read:identity
+  - name: signin_history
+    side_effects: false
+    scope: read:signin
+  - name: ip_reputation
+    side_effects: false
+    scope: read:reputation
+  - name: siem_recent_events
+    side_effects: false
+    scope: read:siem
+  - name: recommend_account_containment
+    side_effects: true
+    request_only: true
+    approval_required: true
+    scope: create:containment-recommendation
+    allowed_only_when_verdict: likely-compromise
+    enforced_by: guardrails.authorize_tool_call
+
+approvals:
+  approver_role: soc-analyst   # documented identity boundary: the demo trusts the caller-supplied analyst_id; production would authenticate this role
+  on_timeout: deny
+  fail_closed: true
+  enforced_by: guardrails.validate_approval
+
+network:
+  runtime: none          # default (stub) profile: no runtime egress. optional 'anthropic' adapter opts into an external API call; 'ollama' is loopback-only
+  install_time: pypi_only
+
+logging:
+  audit: true
+  events: [policy_decision, tool_call, approval, verdict, report]
+  emitted_by: graph._event
+
+limits:
+  max_containment_recommendations_per_run: 1
+  containment_execution: none   # request-only; no code path performs a real account action
+
+mcp_integrity:
+  tool_allowlist: true
+  schema_pinning: true
+  drift_detection: true
+  enforced_by: mcp_client.validate_discovered_tools
+
+evaluation:
+  location: ../engineering-core/tests/test_guardrails.py
+  required_suites:
+    - test_authorized_triage_reaches_human_approval
+    - test_unauthorized_triage_is_blocked_before_tools
+    - test_containment_is_not_actioned_when_rejected
+    - test_human_approval_marks_recommendation_actioned
+    - test_approval_timeout_fails_closed
+    - test_unknown_mcp_tool_is_denied

@@ -1,0 +1,7 @@
+{
+  "$schema": "https://langgra.ph/schema.json",
+  "dependencies": ["."],
+  "graphs": {
+    "soc_triage": "soc_triage_agent.graph:graph"
+  }
+}

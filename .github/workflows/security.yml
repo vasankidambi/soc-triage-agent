@@ -1,0 +1,57 @@
+name: security
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project + dev deps
+        run: pip install './engineering-core[dev]' pyyaml jsonschema
+
+      - name: Guardrail tests
+        run: cd engineering-core && python -m pytest tests -vv
+
+      - name: Governance validator
+        run: cd governance && python validate.py
+
+      - name: Install scanners
+        run: pip install bandit detect-secrets pip-audit semgrep
+
+      - name: Bandit (SAST)
+        run: bandit -r engineering-core/src
+
+      - name: Semgrep (SAST, informational)
+        continue-on-error: true
+        run: semgrep scan --config p/security-audit --severity ERROR engineering-core/src
+
+      - name: detect-secrets (tracked files)
+        run: |
+          detect-secrets scan \
+            | python -c "import json,sys; r=json.load(sys.stdin).get('results',{}); sys.exit(1 if r else 0)"
+
+      - name: pip-audit (dependencies, informational)
+        continue-on-error: true
+        run: pip-audit --skip-editable engineering-core
+
+      - name: Hadolint (Dockerfile lint, informational)
+        continue-on-error: true
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: engineering-core/Dockerfile
+
+      - name: Checkov (Dockerfile policy, informational)
+        continue-on-error: true
+        run: |
+          pip install checkov
+          checkov -f engineering-core/Dockerfile --framework dockerfile --compact

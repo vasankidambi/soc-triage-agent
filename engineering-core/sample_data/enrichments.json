@@ -1,0 +1,42 @@
+{
+  "identity_lookup": {
+    "user_id": "usr-syn-1042",
+    "account_status": "active",
+    "risk_tier": "standard",
+    "home_region": "synthetic-us-east",
+    "managed_devices": ["dev-syn-known-12"]
+  },
+  "signin_history": {
+    "user_id": "usr-syn-1042",
+    "events": [
+      {
+        "observed_at": "2026-08-08T18:40:00Z",
+        "source_ip": "198.51.100.42",
+        "device_id": "dev-syn-new-77",
+        "region": "synthetic-eu-west",
+        "result": "eight-failures-then-success"
+      },
+      {
+        "observed_at": "2026-08-08T17:55:00Z",
+        "source_ip": "203.0.113.18",
+        "device_id": "dev-syn-known-12",
+        "region": "synthetic-us-east",
+        "result": "success"
+      }
+    ]
+  },
+  "ip_reputation": {
+    "ip_address": "198.51.100.42",
+    "reputation": "high-risk-synthetic",
+    "risk_score": 0.93,
+    "signals": ["synthetic-abuse-feed-match", "synthetic-anonymizer-indicator"]
+  },
+  "siem_recent_events": {
+    "user_id": "usr-syn-1042",
+    "events": [
+      "new-device-observed",
+      "multiple-authentication-failures",
+      "synthetic-impossible-travel-correlation"
+    ]
+  }
+}
