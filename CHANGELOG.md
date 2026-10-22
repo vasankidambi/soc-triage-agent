@@ -11,6 +11,8 @@ All notable changes to this project are documented here. The format follows
   can be reused and its audit trail grows; the stub adapter returns a constant risk score; a changed
   tool description is not detected; a model verdict of benign skips the human even when the
   evidence is high risk. Injection text in tool output is bounded, not removed, by design.
+- `scripts/mutation_check.py`: applies 18 hand-written faults in a throwaway git worktree and
+  reports which ones the tests catch (4 with the control tests, 15 with the attack tests).
 
 ### Known upstream issue (not covered by a test)
 - Resuming the human-approval interrupt with `Command(resume=None)` raises `UnboundLocalError` in

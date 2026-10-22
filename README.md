@@ -58,6 +58,24 @@ prompt can promise to prevent — so all authority lives in deterministic layers
 - `governance`: 24/24 checks pass — schema + 10 policy invariants + existence of the 7 enforcement
   functions and 6 guardrail tests the manifest names.
 
+## Mutation check
+
+Coverage shows which lines the tests ran. The mutation check shows which lines the tests
+would notice if they were wrong. `scripts/mutation_check.py` applies 18 hand-written faults
+to the guardrail code one at a time (for example "containment allowed for any verdict" or
+"expired deadline ignored") and counts how many the suite catches. The original six control
+tests catch 4; with `tests/test_attacks.py` the suite catches 15. The three that survive sit
+behind an earlier check that already denies the same input, and the script lists them.
+
+The faults are applied in a throwaway git worktree with its own interpreter, so the MCP tool
+server subprocess is mutated along with the client and the checkout you run from is never
+edited. Commit first: only committed code is measured.
+
+```bash
+python scripts/mutation_check.py --suite repo   # the six control tests
+python scripts/mutation_check.py --suite all    # with the attack tests
+```
+
 ## Quick start
 
 ```bash
