@@ -7,13 +7,16 @@ import operator
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, TypedDict
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import interrupt
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Command, interrupt
 from pydantic import ValidationError
 
 from .guardrails import (
     Correlation,
     InvestigationPlan,
+    PolicyDenied,
     Verdict,
     authorize_triage,
     validate_alert,
@@ -260,6 +263,56 @@ def report_node(state: TriageState) -> dict[str, Any]:
     }
 
 
+def _is_pure_resume(input: Any) -> bool:
+    return (
+        isinstance(input, Command)
+        and input.resume is not None
+        and not input.update
+        and not input.goto
+    )
+
+
+class SingleRunGraph(CompiledStateGraph):
+    """A compiled graph that refuses a fresh start on a thread that already has one.
+
+    ``audit_log`` is additive, so LangGraph would append a second run to the first
+    run's trail. The check runs before the Pregel loop opens, because the loop saves
+    an input checkpoint before the first node executes; a refusal raised inside a
+    node is too late to keep the stored record unchanged. Only a pure resume
+    ``Command`` passes through; one that also updates state or jumps to a node
+    would change the record and is treated as a start. A saver that cannot be
+    read raises, which refuses the start.
+    """
+
+    def _saver_for_start(self, input: Any, config: Any) -> BaseCheckpointSaver | None:
+        if _is_pure_resume(input) or not config:
+            return None
+        if (config.get("configurable") or {}).get("thread_id") is None:
+            return None
+        saver = self.checkpointer
+        return saver if isinstance(saver, BaseCheckpointSaver) else None
+
+    @staticmethod
+    def _refuse(config: Any) -> None:
+        thread_id = config["configurable"]["thread_id"]
+        raise PolicyDenied(
+            f"thread {thread_id} already has a recorded run; use a new thread id"
+        )
+
+    def stream(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+        saver = self._saver_for_start(input, config)
+        if saver is not None and saver.get_tuple(config) is not None:
+            self._refuse(config)
+        return super().stream(input, config, **kwargs)
+
+    async def astream(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+        saver = self._saver_for_start(input, config)
+        if saver is not None and await saver.aget_tuple(config) is not None:
+            self._refuse(config)
+        async for item in super().astream(input, config, **kwargs):
+            yield item
+
+
 def build_graph(checkpointer: Any = None) -> Any:
     """Wire the nodes and edges into a compiled, runnable graph."""
     builder = StateGraph(TriageState)
@@ -282,7 +335,9 @@ def build_graph(checkpointer: Any = None) -> Any:
     builder.add_conditional_edges("risk_gate", route_after_risk_gate)
     builder.add_edge("human_approval", "report")
     builder.add_edge("report", END)
-    return builder.compile(checkpointer=checkpointer)
+    app = builder.compile(checkpointer=checkpointer)
+    app.__class__ = SingleRunGraph  # compile() offers no hook for a subclass
+    return app
 
 
 # Agent Server supplies its own checkpointer. CLI and tests call build_graph with an explicit saver.

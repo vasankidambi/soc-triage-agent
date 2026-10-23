@@ -34,7 +34,7 @@ TB4 High-impact action ↔ human approval · TB5 Everything ↔ audit sink.
 | M8 | Malformed model output corrupts the verdict or report | TB2 | C7 strict Pydantic output validation (`extra="forbid"`) | schema validation in `plan/correlate/verdict` nodes |
 | M9 | Credentials leak via code or config | TB5/A5 | C10 env-only keys; no secrets in repo; `detect-secrets` clean | secret scan reported clean; `model_adapter` |
 | M10 | Agent loops or escalates through many actions | TB3 | C12 one containment/run; read-only fan-out cannot escalate | `risk_gate_node`; manifest `limits` |
-| M11 | Actions taken without a record (repudiation) | TB5 | C11 audit event on every node decision, successful tool call, and approval (denied calls fail closed before a node event) | `graph._event`; `audit_event_count` in report |
+| M11 | Actions taken without a record (repudiation) | TB5 | C11 audit event on every node decision, successful tool call, and approval (denied calls fail closed before a node event); a fresh start on a thread that already holds a checkpoint is refused before the run begins, so two runs can never merge into one record | `graph._event`; `graph.SingleRunGraph`; `audit_event_count` in report; `test_refused_start_writes_nothing` |
 
 ## Assumptions and residual risk
 

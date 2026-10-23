@@ -83,7 +83,7 @@ cd engineering-core
 python3.12 -m venv .venv && source .venv/bin/activate
 python -m pip install '.[dev]'
 pytest -vv
-soc-triage --decision approve --thread-id demo-approved-001
+soc-triage --decision approve
 ```
 
 Then the governance check:
