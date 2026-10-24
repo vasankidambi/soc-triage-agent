@@ -5,16 +5,25 @@ from __future__ import annotations
 import json
 import os
 from abc import ABC, abstractmethod
-from typing import Any
+from datetime import UTC, datetime
+from typing import Any, TypeVar
 from urllib.parse import urlparse
 
 import httpx
 from anthropic import Anthropic
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+)
 
 from .guardrails import (
     Correlation,
     InvestigationPlan,
     Verdict,
+    VerdictLabel,
     sanitize_untrusted_payload,
 )
 
@@ -42,8 +51,107 @@ class ModelAdapter(ABC):
         raise NotImplementedError
 
 
+# Rule weights, thresholds and the evidence each rule reads. See StubModelAdapter.
+BRUTE_FORCE_MIN_FAILURES = 5
+HIGH_RISK_IP_MIN_SCORE = 0.7
+RULE_WEIGHTS: dict[str, float] = {
+    "R1": 0.30,  # failed attempts then success
+    "R2": 0.25,  # high-risk source address
+    "R3": 0.15,  # device not in the managed inventory
+    "R4": 0.12,  # sign-in region differs from the home region
+    "R5": 0.08,  # SIEM impossible-travel correlation
+    "R6": 0.20,  # alert and sign-in history disagree on device or address
+}
+SUSPICIOUS_THRESHOLD = 0.20
+LIKELY_COMPROMISE_THRESHOLD = 0.60
+SIEM_IMPOSSIBLE_TRAVEL = "synthetic-impossible-travel-correlation"
+
+
+class _Evidence(BaseModel):
+    """Strict shape for the fields a rule reads. Other fields the tool returns are
+    ignored here; the broker bounds them and the inventory check pins the tools."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+
+class _AlertFields(_Evidence):
+    failed_attempts: int = Field(ge=0, le=100)
+    device_id: str = Field(min_length=1)
+    source_ip: str = Field(min_length=1)
+
+
+class _Identity(_Evidence):
+    home_region: str = Field(min_length=1)
+    managed_devices: list[str]
+
+
+class _SignInEvent(_Evidence):
+    observed_at: str = Field(min_length=1)
+    device_id: str | None = Field(default=None, min_length=1)
+    source_ip: str | None = Field(default=None, min_length=1)
+    region: str | None = Field(default=None, min_length=1)
+
+    @field_validator("observed_at")
+    @classmethod
+    def timezone_aware_iso_8601(cls, value: str) -> str:
+        if _instant(value) is None:
+            raise ValueError("observed_at must be a timezone-aware ISO 8601 timestamp")
+        return value
+
+    @property
+    def instant(self) -> datetime:
+        instant = _instant(self.observed_at)
+        if instant is None:  # cannot happen: validated on construction
+            raise ValueError("observed_at is not a timezone-aware timestamp")
+        return instant
+
+
+class _SignInHistory(_Evidence):
+    events: list[Any]
+
+
+class _IpReputation(_Evidence):
+    risk_score: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+
+
+class _SiemEvents(_Evidence):
+    events: list[str]
+
+
 class StubModelAdapter(ModelAdapter):
-    """Deterministic Phase 1 behavior for an inspectable, key-free demo."""
+    """Deterministic rules over structured evidence, for a key-free demo.
+
+    ``correlate`` parses each source once into a strict internal model and reads
+    nothing else: free text (the alert summary, unknown SIEM strings, reputation
+    labels) never changes the score, booleans are not numbers, NaN and infinity
+    are not scores, and timestamps are compared as timezone-aware instants in UTC.
+    A source that does not parse is missing (R7), never benign. Each rule reads
+    one source for its fact, so a fact is counted once: failed attempts come from
+    the validated alert integer, not from the sign-in history ``result`` label,
+    and the SIEM feed's "multiple-authentication-failures" and
+    "new-device-observed" entries are not scored because R1 and R3 already count
+    those facts from their primary source.
+
+    rule  fact (field)                                              weight  detection reference
+    R1    alert.failed_attempts >= 5                                 0.30    ATT&CK T1110 Brute Force; DET0463 AN1279 "excessive login attempts followed by success" (SaaS sign-in logs)
+    R2    ip_reputation.risk_score >= 0.7                            0.25    Entra ID Protection "Malicious IP address", "Anonymous IP address"; T1078 DET0560 AN1546 risky sign-ins
+    R3    alert.device_id not in identity_lookup.managed_devices     0.15    Entra ID Protection "Unfamiliar sign-in properties" (device)
+    R4    latest signin_history.region != identity_lookup.home_region 0.12   Entra ID Protection "Atypical travel", "New country"; T1078 AN1546 geographic anomalies
+    R5    SIEM_IMPOSSIBLE_TRAVEL in siem_recent_events.events        0.08    Entra ID Protection "Impossible travel" (a time-based correlation the SIEM computed, distinct from R4)
+    R6    alert.device_id or alert.source_ip differs from the latest  0.20    evidence integrity: the alert and the enrichment describe different events, which alone is suspicious
+          signin_history event
+    R7    a source is missing or does not parse                      floor   missing evidence is not benign: score floored at SUSPICIOUS_THRESHOLD
+    R0    no rule fired and every source is present                  0.00    explicit "nothing found" factor
+
+    Score = min(1.0, sum of fired weights), then the R7 floor. Labels:
+    benign < 0.20 <= suspicious < 0.60 <= likely-compromise. Only likely-compromise
+    reaches the containment and human-approval path. The latest sign-in event is
+    the maximum parsed UTC time; an event that does not parse is dropped, and if
+    the latest one lacks a field a rule needs, that rule stays silent and R7 names
+    signin_history. Alert fields win for the identity of the event under triage
+    (device, address); the sign-in history is context (region, prior events).
+    The weights illustrate the mechanism on synthetic data; they are not calibrated.
+    """
 
     def propose_plan(self, alert: dict[str, Any]) -> InvestigationPlan:
         del alert
@@ -60,30 +168,162 @@ class StubModelAdapter(ModelAdapter):
     def correlate(
         self, alert: dict[str, Any], enrichments: dict[str, Any]
     ) -> Correlation:
-        del alert, enrichments
+        missing: set[str] = set()
+        fired: list[tuple[str, str]] = []
+
+        alert_fields = _parse(_AlertFields, alert, "alert", missing)
+        identity = _parse(
+            _Identity, enrichments.get("identity_lookup"), "identity_lookup", missing
+        )
+        history = _parse(
+            _SignInHistory, enrichments.get("signin_history"), "signin_history", missing
+        )
+        reputation = _parse(
+            _IpReputation, enrichments.get("ip_reputation"), "ip_reputation", missing
+        )
+        siem = _parse(
+            _SiemEvents,
+            enrichments.get("siem_recent_events"),
+            "siem_recent_events",
+            missing,
+        )
+        latest = _latest_event(history.events) if history is not None else None
+        if history is not None and latest is None:
+            missing.add("signin_history")
+
+        if alert_fields is not None:
+            if alert_fields.failed_attempts >= BRUTE_FORCE_MIN_FAILURES:
+                fired.append(
+                    (
+                        "R1",
+                        f"R1 failed attempts then success: {alert_fields.failed_attempts} failures before this sign-in (T1110)",
+                    )
+                )
+            if (
+                identity is not None
+                and alert_fields.device_id not in identity.managed_devices
+            ):
+                fired.append(
+                    (
+                        "R3",
+                        f"R3 device not in the managed inventory: {alert_fields.device_id}",
+                    )
+                )
+        if reputation is not None and reputation.risk_score >= HIGH_RISK_IP_MIN_SCORE:
+            fired.append(
+                (
+                    "R2",
+                    f"R2 high-risk source address: reputation score {reputation.risk_score}",
+                )
+            )
+        if latest is not None and identity is not None:
+            if latest.region is None:
+                missing.add("signin_history")
+            elif latest.region != identity.home_region:
+                fired.append(
+                    (
+                        "R4",
+                        f"R4 sign-in region {latest.region} differs from home region {identity.home_region}",
+                    )
+                )
+        if siem is not None and SIEM_IMPOSSIBLE_TRAVEL in siem.events:
+            fired.append(
+                ("R5", f"R5 SIEM correlation present: {SIEM_IMPOSSIBLE_TRAVEL}")
+            )
+        if latest is not None and alert_fields is not None:
+            if latest.device_id is None or latest.source_ip is None:
+                missing.add("signin_history")
+            else:
+                mismatched = [
+                    f"{name} {getattr(alert_fields, name)!r} vs {getattr(latest, name)!r}"
+                    for name in ("device_id", "source_ip")
+                    if getattr(alert_fields, name) != getattr(latest, name)
+                ]
+                if mismatched:
+                    fired.append(
+                        (
+                            "R6",
+                            "R6 alert and latest sign-in disagree: "
+                            + "; ".join(mismatched),
+                        )
+                    )
+
+        fired.sort(key=lambda item: item[0])
+        score = min(1.0, sum(RULE_WEIGHTS[rule_id] for rule_id, _ in fired))
+        factors = [text for _, text in fired]
+        if missing:
+            factors.extend(
+                f"R7 missing evidence: {source} returned no usable output"
+                for source in sorted(missing)
+            )
+            score = max(score, SUSPICIOUS_THRESHOLD)
+        if not factors:
+            factors.append("R0 no risk rule fired")
         return Correlation(
-            risk_score=0.94,
-            factors=[
-                "successful sign-in followed repeated failures",
-                "source address has a high-risk synthetic reputation",
-                "device is not in the synthetic managed-device inventory",
-                "sign-in sequence is inconsistent with the prior synthetic region",
-            ],
+            risk_score=round(score, 2),
+            factors=factors,
             assessment=(
-                "The fixed Phase 1 rules correlate independent synthetic identity, device, "
-                "network, and SIEM signals. The evidence supports likely account compromise."
+                f"{len(fired)} of {len(RULE_WEIGHTS)} fixed rules fired over structured evidence; "
+                f"score {score:.2f} against thresholds {SUSPICIOUS_THRESHOLD} and "
+                f"{LIKELY_COMPROMISE_THRESHOLD}."
             ),
         )
 
     def propose_verdict(self, correlation: Correlation) -> Verdict:
+        score = correlation.risk_score
+        if score >= LIKELY_COMPROMISE_THRESHOLD:
+            label = VerdictLabel.LIKELY_COMPROMISE
+            next_step = "Recommend a password reset and active-session revocation for analyst review."
+        elif score >= SUSPICIOUS_THRESHOLD:
+            label = VerdictLabel.SUSPICIOUS
+            next_step = "Report only; an analyst should review the fired rules before any action."
+        else:
+            label = VerdictLabel.BENIGN
+            next_step = "Report only; no risk rule fired."
         return Verdict(
-            label="likely-compromise",
-            confidence=correlation.risk_score,
+            label=label,
+            confidence=score,
             evidence=correlation.factors,
-            recommended_next_step=(
-                "Recommend a password reset and active-session revocation for analyst review."
-            ),
+            recommended_next_step=next_step,
         )
+
+
+_ModelT = TypeVar("_ModelT", bound=BaseModel)
+
+
+def _parse(
+    model: type[_ModelT], raw: Any, source: str, missing: set[str]
+) -> _ModelT | None:
+    """Parse one source once; anything that does not fit the strict shape is missing."""
+    try:
+        return model.model_validate(raw)
+    except ValidationError:
+        missing.add(source)
+        return None
+
+
+def _instant(value: str) -> datetime | None:
+    """Parse an ISO 8601 timestamp into a UTC instant; naive or malformed is None."""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
+def _latest_event(events: list[Any]) -> _SignInEvent | None:
+    """The most recent event by parsed UTC instant; events that do not parse are dropped."""
+    parsed: list[_SignInEvent] = []
+    for raw in events:
+        try:
+            parsed.append(_SignInEvent.model_validate(raw))
+        except ValidationError:
+            continue
+    if not parsed:
+        return None
+    return max(parsed, key=lambda event: event.instant)
 
 
 class JsonModelAdapter(ModelAdapter):

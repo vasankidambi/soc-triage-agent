@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation check: apply 18 hand-written faults to the guardrail code, one at a
+"""Mutation check: apply 21 hand-written faults to the guardrail code, one at a
 time, and report which ones the test suite catches. A mutant is "killed" when
 pytest exits non-zero.
 
@@ -181,6 +181,27 @@ MUTANTS = [
         "mcp_client.py",
         '        if "const" in rule and value != rule["const"]:',
         "        if False:",
+    ),
+    Mutant(
+        "M19",
+        "finite and range check removed from the reputation score",
+        "model_adapter.py",
+        "    risk_score: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)",
+        "    risk_score: float",
+    ),
+    Mutant(
+        "M20",
+        "bool accepted as a number (strict parsing off)",
+        "model_adapter.py",
+        '    model_config = ConfigDict(extra="ignore", strict=True)',
+        '    model_config = ConfigDict(extra="ignore", strict=False)',
+    ),
+    Mutant(
+        "M21",
+        "timestamps compared as text",
+        "model_adapter.py",
+        "    return max(parsed, key=lambda event: event.instant)",
+        "    return max(parsed, key=lambda event: event.observed_at)",
     ),
 ]
 
