@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import sys
 import uuid
 from contextlib import closing
 from pathlib import Path
@@ -14,6 +15,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from .graph import build_graph
+from .guardrails import PolicyDenied
 
 
 def _project_root() -> Path:
@@ -49,6 +51,26 @@ def _decision_payload(choice: str) -> dict[str, Any]:
         "analyst_id": "analyst-local",
         "note": "No response before deadline.",
     }
+
+
+def _claim_thread(connection: sqlite3.Connection, thread_id: str) -> None:
+    """Take the thread id for this process, or exit if another run holds it.
+
+    The graph refuses a start on a thread that already has a checkpoint, but two
+    processes that start together both see an empty thread. The primary key makes
+    exactly one of them win. Any failure to claim exits: an unreadable database is
+    not a free thread.
+    """
+    try:
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS thread_claims (thread_id TEXT PRIMARY KEY)"
+        )
+        connection.execute("INSERT INTO thread_claims VALUES (?)", (thread_id,))
+        connection.commit()
+    except sqlite3.IntegrityError:
+        sys.exit(f"thread {thread_id} is already in use; pass a new --thread-id")
+    except sqlite3.Error as exc:
+        sys.exit(f"thread {thread_id}: cannot claim it ({exc})")
 
 
 def _ask_for_decision() -> str:
@@ -91,12 +113,16 @@ def main() -> None:
     ) as connection:
         checkpointer = SqliteSaver(connection)
         app = build_graph(checkpointer=checkpointer)
+        _claim_thread(connection, args.thread_id)
 
         print(f"Thread: {args.thread_id}")
         print(
             "Starting: intake -> plan -> parallel enrichment -> correlate -> verdict -> risk gate"
         )
-        paused = app.invoke(initial, config=config)
+        try:
+            paused = app.invoke(initial, config=config)
+        except PolicyDenied as exc:
+            sys.exit(str(exc))
         if paused.get("blocked"):
             print(
                 json.dumps(

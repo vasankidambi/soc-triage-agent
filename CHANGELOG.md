@@ -14,6 +14,22 @@ All notable changes to this project are documented here. The format follows
 - `scripts/mutation_check.py`: applies 18 hand-written faults in a throwaway git worktree and
   reports which ones the tests catch (4 with the control tests, 15 with the attack tests).
 
+### Fixed
+- A fresh start on a thread id that already holds a checkpoint is refused before the run begins,
+  so the stored record is unchanged and a paused run can still be resumed afterwards. The CLI
+  also claims the thread id in the checkpoint database, so two processes started together on the
+  same id cannot both run. Scripts that reuse a fixed `--thread-id` now exit 1 on the second run;
+  the README quick start lets the CLI generate the id.
+
+### Known limits
+- A refused start is not itself recorded in the audit trail; the refusal is only the error
+  returned to the caller.
+- A claimed thread id stays claimed even if the process dies before its first checkpoint.
+- The guard covers the graph object that `build_graph` returns. The LangGraph Agent Server
+  manages its own threads and checkpointer and is not covered.
+- A caller that holds the checkpointer can still edit a thread's state directly with
+  `update_state`; the guard covers starts, not state edits.
+
 ### Known upstream issue (not covered by a test)
 - Resuming the human-approval interrupt with `Command(resume=None)` raises `UnboundLocalError` in
   LangGraph 1.2.10 (`langgraph/pregel/_loop.py`) before the application's approval validation runs.
