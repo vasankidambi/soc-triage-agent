@@ -53,19 +53,46 @@ prompt can promise to prevent — so all authority lives in deterministic layers
 
 ## Results
 
-- `engineering-core`: 6 control tests green; runs with no API key and no runtime network in the default profile; non-root
+- `engineering-core`: 71 tests green (6 control tests plus the attack suite; 3 strict xfails document open gaps); runs with no API key and no runtime network in the default profile; non-root
   container image; secret, SAST, and dependency scans run in CI (see `.github/workflows/security.yml`).
 - `governance`: 24/24 checks pass — schema + 10 policy invariants + existence of the 7 enforcement
   functions and 6 guardrail tests the manifest names.
 
+## How the default stub scores
+
+The default adapter is a fixed rule set over structured evidence, so the demo runs with no
+model and no key, and every verdict can be traced to the fields that produced it. Each tool
+output is parsed once into a strict shape before any rule reads it: booleans are not numbers,
+NaN and infinity are not scores, timestamps must carry a timezone and are compared in UTC, and
+a source that does not parse counts as missing. Free text never moves the score. Each fact is
+counted from one source. Missing tool output is never treated as benign.
+
+| Rule | Evidence | Weight | Reference |
+|---|---|---|---|
+| R1 | `alert.failed_attempts` of 5 or more | 0.30 | ATT&CK T1110 Brute Force, DET0463 AN1279 "excessive login attempts followed by success" |
+| R2 | `ip_reputation.risk_score` of 0.7 or more | 0.25 | Entra ID Protection "Malicious IP address", "Anonymous IP address" |
+| R3 | `alert.device_id` not in `identity_lookup.managed_devices` | 0.15 | Entra ID Protection "Unfamiliar sign-in properties" |
+| R4 | latest sign-in region differs from `identity_lookup.home_region` | 0.12 | Entra ID Protection "Atypical travel", "New country"; T1078 DET0560 |
+| R5 | SIEM impossible-travel correlation present | 0.08 | Entra ID Protection "Impossible travel" |
+| R6 | alert and latest sign-in disagree on device or address | 0.20 | evidence integrity; alone it is suspicious |
+| R7 | a tool output is missing or unusable | floor 0.20 | missing evidence is not benign |
+
+Score is the capped sum of fired weights. Labels: benign below 0.20, suspicious from 0.20,
+likely-compromise from 0.60. Only likely-compromise reaches containment and human approval.
+The sample alert scores 0.90 with R1 to R5 fired. No two rules reach 0.60. Three rules reach
+it only as R1 and R2 with any third, R1 and R6 with R3 or R4, or R2, R6 and R3. Any four rules
+that include R1 or R2 reach it.
+The weights illustrate the mechanism on synthetic data; they are not a calibrated model.
+
 ## Mutation check
 
 Coverage shows which lines the tests ran. The mutation check shows which lines the tests
-would notice if they were wrong. `scripts/mutation_check.py` applies 18 hand-written faults
-to the guardrail code one at a time (for example "containment allowed for any verdict" or
-"expired deadline ignored") and counts how many the suite catches. The original six control
-tests catch 4; with `tests/test_attacks.py` the suite catches 15. The three that survive sit
-behind an earlier check that already denies the same input, and the script lists them.
+would notice if they were wrong. `scripts/mutation_check.py` applies 21 hand-written faults
+to the guardrail and stub code one at a time (for example "containment allowed for any verdict",
+"expired deadline ignored" or "bool accepted as a number") and counts how many the suite catches.
+The original six control tests catch 4; with `tests/test_attacks.py` the suite catches 18. The
+three that survive sit behind an earlier check that already denies the same input, and the
+script lists them.
 
 The faults are applied in a throwaway git worktree with its own interpreter, so the MCP tool
 server subprocess is mutated along with the client and the checkout you run from is never
