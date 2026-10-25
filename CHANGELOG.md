@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-25
+
 ### Added
 - `engineering-core/tests/test_attacks.py`: attack tests for the model, tool, policy, approval and
   audit boundaries. Three stay `xfail(strict=True)` and document known gaps: a changed tool

@@ -1,15 +1,28 @@
-# Agentic SOC Triage — build and govern
+# Agentic SOC Triage: build and govern
 
-A local, defensive AI agent that triages a synthetic suspicious-login alert end to end — validate scope,
-gather evidence over MCP, correlate, reach a verdict, and pause for a human before any containment
-recommendation can be recorded as actioned — paired with the security-architect layer that governs it.
+A local AI agent that triages a synthetic suspicious-login alert and pauses for a human before any
+containment recommendation is recorded, paired with a governance layer that checks the controls
+against the code. It is a working, attackable reference for security engineers and architects.
+It runs on a laptop on synthetic data, with no model key and no network at runtime.
 
-The project is two halves of one idea: how you *build* an agent that touches a sensitive workflow, and how
-you *govern* it.
+## What this demonstrates
 
-```
-engineering-core/   the agent: LangGraph runtime, MCP tools, deterministic guardrails, tests
-governance/         the assurance layer: security manifest, control matrix, threat model, validator
+- The model proposes, deterministic policy authorizes: [`authorize_tool_call`](engineering-core/src/soc_triage_agent/guardrails.py) and the pinned schemas in [`mcp_client.py`](engineering-core/src/soc_triage_agent/mcp_client.py) mediate every tool call.
+- Human approval fails closed: timeout, expired deadline or malformed response denies ([`validate_approval`](engineering-core/src/soc_triage_agent/guardrails.py), [`test_guardrails.py`](engineering-core/tests/test_guardrails.py)).
+- Attack tests plus a mutation check: 75 tests, 3 strict xfails for open gaps ([#1](https://github.com/vasankidambi/soc-triage-agent/pull/1)); 21 hand-written faults, 18 caught ([#2](https://github.com/vasankidambi/soc-triage-agent/pull/2)).
+- Strict evidence parsing: booleans, NaN, infinity and malformed timestamps count as missing evidence, never as scores ([#4](https://github.com/vasankidambi/soc-triage-agent/pull/4)).
+
+## Quick start
+
+About 2 minutes on a clean Python 3.12 environment (measured 111 seconds, 41 of them the install).
+
+```bash
+cd engineering-core
+python3.12 -m venv .venv && source .venv/bin/activate
+python -m pip install '.[dev]'
+pytest -vv                      # 72 passed, 3 xfailed
+soc-triage --decision approve   # pauses for approval, then prints the audit trace and report
+cd ../governance && python3 -m pip install pyyaml jsonschema && python3 validate.py   # 24/24 checks passed
 ```
 
 ## Architecture
@@ -38,25 +51,24 @@ flowchart LR
 > MCP executes; a human approves anything consequential.
 
 The model has no authority to act. Prompt injection is treated as something to *contain*, not something a
-prompt can promise to prevent — so all authority lives in deterministic layers behind the model.
+prompt can promise to prevent, so all authority lives in deterministic layers behind the model.
 
-## What it demonstrates
+The runtime is self-hosted LangGraph with durable checkpoints and a human-in-the-loop interrupt,
+model-agnostic behind a swappable adapter (deterministic stub by default; Claude or a local model
+optional). Tool calls go through an MCP broker that allow-lists tools, pins input schemas and
+rejects drift. The governance layer maps each control to OWASP LLM Top 10 (2025), MITRE ATLAS and
+NIST AI RMF, and `governance/validate.py` confirms the enforcement functions and tests the manifest
+names still exist in the code (24 checks: 1 schema, 10 policy invariants, 7 functions, 6 tests).
+Secret, SAST and dependency scans run in CI (`.github/workflows/security.yml`).
 
-- A production-shaped agent runtime (state, routing, durable checkpoints, human-in-the-loop) on
-  self-hosted LangGraph, model-agnostic behind a swappable adapter (deterministic stub by default; Claude
-  or a local model optional).
-- Complete mediation of every tool call, MCP tool allow-listing with schema-pinning and drift detection,
-  fail-closed human approval, a synthetic-only data scope, and a structured audit trail across the run.
-- A governance layer that maps each control to OWASP LLM Top 10 (2025), MITRE ATLAS, and NIST AI RMF —
-  and a validator that confirms the enforcement functions and tests the manifest names still exist in
-  the code, so the governance can't silently drift from it.
+## Found and fixed
 
-## Results
+- [#1](https://github.com/vasankidambi/soc-triage-agent/pull/1) the six control tests proved the happy path only; an attack suite now states what each control must do under hostile input.
+- [#2](https://github.com/vasankidambi/soc-triage-agent/pull/2) nothing measured whether the tests would notice a broken guardrail; a mutation check now applies 21 faults and lists the survivors.
+- [#3](https://github.com/vasankidambi/soc-triage-agent/pull/3) a second run on the same thread id merged two audit trails, and a refused run could still overwrite the stored record; the guard now runs before LangGraph writes.
+- [#4](https://github.com/vasankidambi/soc-triage-agent/pull/4) the default adapter returned 0.94 regardless of evidence; seven named rules now score parsed fields, and benign evidence stays benign.
 
-- `engineering-core`: 71 tests green (6 control tests plus the attack suite; 3 strict xfails document open gaps); runs with no API key and no runtime network in the default profile; non-root
-  container image; secret, SAST, and dependency scans run in CI (see `.github/workflows/security.yml`).
-- `governance`: 24/24 checks pass — schema + 10 policy invariants + existence of the 7 enforcement
-  functions and 6 guardrail tests the manifest names.
+Still open, as strict xfails: a changed tool description is not detected, and a model that says benign against high-risk evidence skips the human.
 
 ## How the default stub scores
 
@@ -103,22 +115,11 @@ python scripts/mutation_check.py --suite repo   # the six control tests
 python scripts/mutation_check.py --suite all    # with the attack tests
 ```
 
-## Quick start
+## Layout
 
-```bash
-cd engineering-core
-python3.12 -m venv .venv && source .venv/bin/activate
-python -m pip install '.[dev]'
-pytest -vv
-soc-triage --decision approve
 ```
-
-Then the governance check:
-
-```bash
-cd ../governance
-python3 -m pip install pyyaml jsonschema
-python3 validate.py
+engineering-core/   the agent: LangGraph runtime, MCP tools, deterministic guardrails, tests
+governance/         the assurance layer: security manifest, control matrix, threat model, validator
 ```
 
 See [`governance/`](governance/) for the security contract and framework mappings, and
@@ -126,4 +127,4 @@ See [`governance/`](governance/) for the security contract and framework mapping
 
 ## Author
 
-Vasan Kidambi — [linkedin.com/in/vasankidambi](https://linkedin.com/in/vasankidambi)
+Vasan Kidambi, [linkedin.com/in/vasankidambi](https://linkedin.com/in/vasankidambi)

@@ -5,7 +5,7 @@ manifest_version: "1.0"
 
 metadata:
   name: soc-triage-agent
-  version: "0.1.0"
+  version: "0.2.0"
   owner: security-architecture
   risk_tier: 1   # produces containment recommendations touching a sensitive workflow; approval-gated
   description: >

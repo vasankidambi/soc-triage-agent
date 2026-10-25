@@ -1,4 +1,4 @@
-# Threat Model — SOC Triage Agent
+# Threat Model: SOC Triage Agent
 
 Scope: the defensive SOC alert-triage agent in `../engineering-core`. Every misuse case names the
 control that defends it and the code or test that supports the defense. This is a threat model of the
@@ -39,8 +39,8 @@ TB4 High-impact action ↔ human approval · TB5 Everything ↔ audit sink.
 ## Assumptions and residual risk
 
 The design assumes platform controls exist beneath it (host, network, SDLC). It deliberately does **not**
-claim to prevent prompt injection at the model boundary — M1's containment is that injection may succeed at
+claim to prevent prompt injection at the model boundary; M1's containment is that injection may succeed at
 TB2, so all authority is held in deterministic layers (TB3–TB4). Static validation checks the *contract* stays consistent with the code;
 the `test_guardrails.py` suite exercises the *runtime* behavior. The stub model makes Phase 1 fully
 deterministic; the same trust boundaries apply when a real model adapter is enabled, because the model's
-role — propose only — does not change.
+role (propose only) does not change.
